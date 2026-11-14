@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M8 Wavetable Patcher</title>
+<meta name="description" content="Client-side tool for replacing the built-in WAVSYNTH wavetables and names in Dirtywave M8 firmware files.">
+<style>
+:root{
+  --bg:#09090b; --panel:#111115; --panel2:#17171d; --line:#2a2a33; --line2:#1c1c23;
+  --fg:#e8e8ec; --dim:#8a8a96; --faint:#4b4b56;
+  --sel:#4fc3f7; --sel-ink:#00141c; --hi:#ffb347; --warn:#ffd166; --err:#ff6b6b; --ok:#7ee08a;
+  --mono:ui-monospace,"SFMono-Regular","SF Mono",Menlo,Consolas,"Liberation Mono","DejaVu Sans Mono",monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 var(--mono)}
+body{padding:16px 20px 12px;min-height:100vh;display:flex;flex-direction:column}
+button{font:inherit;color:var(--fg);background:var(--panel2);border:1px solid var(--line);padding:7px 14px;cursor:pointer;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
+button:hover:not(:disabled){border-color:var(--sel);color:#fff}
+button:focus-visible,input:focus-visible,.menu:focus-visible{outline:1px solid var(--sel);outline-offset:1px}
+button:disabled{color:var(--faint);border-color:var(--line2);cursor:not-allowed}
+button.primary:not(:disabled){border-color:var(--sel);color:var(--sel)}
+button.active{background:var(--sel);color:var(--sel-ink);border-color:var(--sel)}
+input[type=text]{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);padding:5px 8px}
+input[type=text]:disabled{color:var(--faint)}
+input.bad{border-color:var(--err)}
+
+.top{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.top .left{display:flex;align-items:center;gap:14px;min-width:0}
+.fwinfo{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.grid{display:grid;grid-template-columns:300px minmax(0,1fr) auto;grid-template-rows:auto 1fr;
+  grid-template-areas:"btns . ." "menu center right";column-gap:22px;row-gap:10px;margin-top:34px;flex:1}
+.leftbtns{grid-area:btns;display:flex;flex-direction:column;gap:6px}
+.leftbtns button{text-align:left}
+.menu{grid-area:menu;height:calc(100vh - 250px);min-height:380px;overflow-y:auto;border:1px solid var(--line);background:var(--panel);position:relative}
+.menu .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--faint);text-align:center;padding:20px}
+.item{display:flex;cursor:pointer;border-bottom:1px solid var(--line2);white-space:pre;user-select:none}
+.item .hx{flex:0 0 3.6ch;text-align:center;padding:4px 0;border-right:1px solid var(--line);color:var(--dim)}
+.item .nm{padding:4px 10px;overflow:hidden;text-overflow:ellipsis}
+.item:hover{background:var(--panel2)}
+.item.sel{background:var(--sel);color:var(--sel-ink)}
+.item.sel .hx{color:var(--sel-ink);border-right-color:rgba(0,0,0,.3)}
+
+.center{grid-area:center;display:flex;flex-direction:column;gap:10px;min-width:0}
+.namebox{display:flex;align-items:center;width:calc(15ch + 24px);height:36px;padding:0 10px;border:1px solid var(--line);background:var(--panel);cursor:text}
+.namebox.disabled{cursor:default}
+.namebox .pfx{color:var(--fg)}
+.namebox input{flex:1;min-width:0;width:12ch;border:0;outline:0;background:transparent;color:var(--fg);font:inherit;padding:0;text-transform:uppercase}
+.namebox:focus-within{border-color:var(--sel)}
+.namebox.disabled .pfx,.namebox input:disabled{color:var(--faint)}
+.viz{width:100%;height:calc(100vh - 340px);min-height:290px;border:1px solid var(--line);background:var(--panel);display:block}
+.scrub{display:flex;align-items:center;gap:14px}
+.scrub input[type=range]{flex:1;accent-color:var(--hi);min-width:0}
+.scrub .lbl{color:var(--dim);min-width:15ch;text-align:right}
+.scrub .lbl b{color:var(--hi);font-weight:normal}
+
+.right{grid-area:right;display:flex;align-items:flex-start;gap:8px}
+.right .col{display:flex;flex-direction:column;gap:6px}
+.right button{height:36px;min-width:96px}
+.secs{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:12px}
+.secs input{width:7ch;padding:3px 6px;text-align:right}
+
+footer{margin-top:14px;color:var(--faint);font-size:11px}
+
+/* dialogs */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
+.overlay.open{display:flex}
+.dialog{background:var(--panel);border:1px solid var(--line);width:min(600px,100%);max-height:calc(100vh - 32px);overflow:auto;padding:18px 22px}
+.dialog h2{font-size:14px;font-weight:normal;text-transform:uppercase;letter-spacing:.06em;margin:0 0 12px;color:var(--sel)}
+.dialog p{margin:0 0 12px}
+.dialog .dim{color:var(--dim)}
+.dialog fieldset{border:1px solid var(--line);margin:0 0 14px;padding:8px 12px 10px}
+.dialog legend{color:var(--dim);padding:0 6px}
+.dialog label{display:inline-flex;align-items:center;gap:6px;margin-right:18px;cursor:pointer}
+.dialog label.block{display:flex;margin:6px 0}
+.dialog input[type=radio]{accent-color:var(--sel)}
+.filerow{display:flex;align-items:center;gap:12px;margin:0 0 12px;min-width:0}
+.filerow .fname{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status{min-height:1.4em;margin:0 0 12px}
+.status:empty{display:none}
+.msg{margin:6px 0}
+.msg.ok{color:var(--ok)} .msg.warn{color:var(--warn)} .msg.err{color:var(--err)} .msg.info{color:var(--dim)}
+.dialog ul{margin:4px 0 12px;padding-left:20px}
+.dialog li{margin:3px 0}
+.layout{border:1px solid var(--line);padding:10px 12px;margin:0 0 12px}
+.layout .row{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin-top:8px}
+.layout .field{display:flex;flex-direction:column;gap:4px;color:var(--dim);font-size:12px}
+.layout .field input{width:12ch}
+.linkbtn{background:none;border:0;padding:0;color:var(--sel);text-transform:none;letter-spacing:0;text-decoration:underline;cursor:pointer}
+.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}
+
+@media (max-width:900px){
+  .grid{grid-template-columns:1fr;grid-template-areas:"btns" "menu" "center" "right";row-gap:12px}
+  .menu{height:300px;min-height:0}
+  .viz{height:300px}
+}
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="left">
+    <button id="btnLoadFw">Load firmware</button>
+    <span class="fwinfo" id="fwInfo"></span>
+  </div>
+  <button id="btnPatch" disabled>Patch</button>
+</div>
+
+<div class="grid">
+  <div class="leftbtns">
+    <button id="btnLoadWt" disabled>Load wavetable</button>
+    <button id="btnExportWt" disabled>Export wavetable</button>
+  </div>
+
+  <div class="menu" id="menu" tabindex="0" role="listbox" aria-label="Wavetable shapes">
+    <div class="empty" id="menuEmpty">Load a firmware file to list its wavetables.</div>
+  </div>
+
+  <div class="center">
+    <div class="namebox disabled" id="nameBox">
+      <span class="pfx">WT-</span><input id="nameInput" type="text" maxlength="12" spellcheck="false" autocomplete="off" disabled aria-label="Wavetable name">
+    </div>
+    <canvas class="viz" id="viz" aria-label="Wavetable visualizer"></canvas>
+    <div class="scrub">
+      <input type="range" id="frameSlider" min="0" max="63" step="1" value="0" disabled aria-label="Frame">
+      <span class="lbl" id="frameLbl">FRAME --/64</span>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="col">
+      <button id="btnTravel" disabled>Travel</button>
+      <label class="secs"><input type="text" id="travelSecs" value="4" inputmode="decimal" disabled aria-label="Travel time in seconds"> sec</label>
+    </div>
+    <button id="btnToggle" disabled>Toggle</button>
+  </div>
+</div>
+
+<footer>Runs entirely in your browser: nothing is uploaded, and no firmware, wavetables or names are included in this page. Not affiliated with Dirtywave. Flash modified firmware at your own risk.</footer>
+
+<div class="overlay" id="overlay"><div class="dialog" id="dialog" role="dialog" aria-modal="true"></div></div>
+
+<script>
+'use strict';
+/* ---------- constants: firmware layout ---------- */
+const NAME_LEN = 15;            // bytes per name entry (text, NUL, space padding)
+const NUM_SHAPES = 70;          // shapes 0x00..0x45 in the name table
+const FIRST_WT = 9;             // first wavetable shape (0x09)
+const NUM_WT = 61;              // wavetable shapes 0x09..0x45
+const FRAME = 256, FRAMES = 64, SLOT = FRAME * FRAMES;   // 16,384 bytes per wavetable
+const BASIC_BYTES = 8 * FRAME;  // basic shapes 0-7 stored before the wavetables
+const NAME_MAX = 12;            // editable characters after "WT-"
+const NOTE_HZ = 261.63;         // playback pitch (C-4)
+const VOLUME = 0.28;
+// Name-table address of each firmware build this tool was made with. Other versions are found by search.
+const MODELS = {
+  headless: {label: 'Headless', ver: '6.5.2C', nameTable: 0x60075BB4, hint: /headless/i},
+  model01:  {label: 'Model 01', ver: '6.6.2A', nameTable: 0x600CA178, hint: /model[\s_-]*0?1(?!\d)/i},
+  model02:  {label: 'Model 02', ver: '6.6.2A', nameTable: 0x600CE388, hint: /model[\s_-]*0?2(?!\d)/i},
+};
+// Start of the name table (basic shape names, never edited by this tool) and first bytes of the built-in SINE.
+const SIG = Uint8Array.from('PULSE 12%\0     PULSE 25%\0', c => c.charCodeAt(0));
+const SINE_START = [0x80, 0x83, 0x86, 0x89];
+
+/* ---------- helpers ---------- */
+const $ = s => document.querySelector(s);
+const hex2 = n => n.toString(16).toUpperCase().padStart(2, '0');
+const hexA = n => '0x' + n.toString(16).toUpperCase().padStart(8, '0');
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtN = n => n.toLocaleString('en-US');
+const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+const waveStartOf = nameTable => Math.ceil((nameTable + NUM_SHAPES * NAME_LEN) / 4) * 4;
+const slotLabel = i => `${hex2(FIRST_WT + i)} · WT-${S.names[i]}`;
+
+/* ---------- state ---------- */
+const S = { names: [], tables: [], sel: -1, frame: 0, dirty: false, loaded: false };
+
+/* ---------- Intel HEX ---------- */
+const HEXV = new Int8Array(128).fill(-1);
+'0123456789'.split('').forEach((c, i) => HEXV[c.charCodeAt(0)] = i);
+'abcdef'.split('').forEach((c, i) => { HEXV[c.charCodeAt(0)] = 10 + i; HEXV[c.toUpperCase().charCodeAt(0)] = 10 + i; });
+const hv = c => c < 128 ? HEXV[c] : -1;
+const HEXCH = '0123456789ABCDEF';
+
+function parseHex(text) {
+  const lines = text.split(/(?<=\n)/);
+  const recs = [];
+  let base = 0, lo = Infinity, hi = -1;
+  for (let li = 0; li < lines.length; li++) {
+    const s = lines[li];
+    let st = 0, end = s.length;
+    while (end > 0 && /\s/.test(s[end - 1])) end--;
+    while (st < end && /\s/.test(s[st])) st++;
+    if (st === end) continue;
+    if (s[st] !== ':') throw new Error(`Line ${li + 1} is not an Intel HEX record. Is this really a firmware .hex file?`);
+    const nb = (end - st - 1) / 2;
+    if (!Number.isInteger(nb) || nb < 5) throw new Error(`Line ${li + 1} has an invalid length; the file may be damaged.`);
+    const rec = new Uint8Array(nb);
+    let sum = 0;
+    for (let i = 0; i < nb; i++) {
+      const a = hv(s.charCodeAt(st + 1 + 2 * i)), b = hv(s.charCodeAt(st + 2 + 2 * i));
+      if (a < 0 || b < 0) throw new Error(`Line ${li + 1} contains characters that aren't hex; the file may be damaged.`);
+      rec[i] = (a << 4) | b; sum += rec[i];
+    }
+    if (rec[0] + 5 !== nb) throw new Error(`Line ${li + 1} has the wrong length; the file may be damaged.`);
+    if (sum & 255) throw new Error(`Line ${li + 1} has a bad checksum; the file may be damaged.`);
+    const type = rec[3];
+    if (type === 0) {
+      const start = base + ((rec[1] << 8) | rec[2]);
+      recs.push({li, start, len: rec[0], data: rec.subarray(4, 4 + rec[0])});
+      if (start < lo) lo = start;
+      if (start + rec[0] - 1 > hi) hi = start + rec[0] - 1;
+    } else if (type === 2) base = ((rec[4] << 8) | rec[5]) * 16;
+    else if (type === 4) base = ((rec[4] << 8) | rec[5]) * 65536;
+    else if (type === 1) break;
+  }
+  if (!recs.length) throw new Error('No data records were found in this file.');
+  const size = hi - lo + 1;
+  if (size > 64 * 1024 * 1024) throw new Error('The address range in this file is too large to be M8 firmware.');
+  const img = new Uint8Array(size).fill(0xFF), mask = new Uint8Array(size);
+  for (const r of recs) { img.set(r.data, r.start - lo); mask.fill(1, r.start - lo, r.start - lo + r.len); r.data = null; }
+  return {lines, recs, lo, hi, img, mask};
+}
+
+function validAt(fw, nameTable) {
+  const i = nameTable - fw.lo;
+  if (i < 0 || i + NUM_SHAPES * NAME_LEN > fw.img.length) return false;
+  for (let k = 0; k < SIG.length; k++) if (fw.img[i + k] !== SIG[k]) return false;
+  const w = waveStartOf(nameTable) - fw.lo;
+  if (w + BASIC_BYTES + NUM_WT * SLOT > fw.img.length) return false;
+  for (let k = 0; k < 4; k++) if (fw.img[w + 6 * FRAME + k] !== SINE_START[k]) return false;
+  for (let k = i; k < i + NUM_SHAPES * NAME_LEN; k++) if (!fw.mask[k]) return false;
+  for (let k = w; k < w + BASIC_BYTES + NUM_WT * SLOT; k++) if (!fw.mask[k]) return false;
+  return true;
+}
+
+function findSig(fw) {
+  const out = [], img = fw.img, n = img.length - SIG.length, f = SIG[0];
+  outer: for (let i = 0; i <= n; i++) {
+    if (img[i] !== f) continue;
+    for (let k = 1; k < SIG.length; k++) if (img[i + k] !== SIG[k]) continue outer;
+    out.push(fw.lo + i);
+  }
+  return out;
+}
+
+function locate(fw, modelKey) {
+  const m = MODELS[modelKey];
+  if (validAt(fw, m.nameTable)) return {nameTable: m.nameTable, wave: waveStartOf(m.nameTable), exact: true, matchKey: modelKey};
+  const hits = findSig(fw).filter(a => validAt(fw, a));
+  if (!hits.length) throw new Error("Couldn't find the wavetable names and data in this file. It may not be M8 firmware, or this version stores them differently.");
+  if (hits.length > 1) throw new Error('Found more than one possible wavetable location in this file, so it is not safe to guess.');
+  const a = hits[0];
+  return {nameTable: a, wave: waveStartOf(a), exact: false, matchKey: Object.keys(MODELS).find(k => MODELS[k].nameTable === a) || null};
+}
+
+function readName(fw, loc, slot) {
+  const a = loc.nameTable + (FIRST_WT + slot) * NAME_LEN - fw.lo;
+  let s = '';
+  for (let k = 0; k < NAME_LEN; k++) { const c = fw.img[a + k]; if (c === 0) break; s += String.fromCharCode(c); }
+  return s.replace(/\s+$/, '');
+}
+function readTable(fw, loc, slot) {
+  const a = loc.wave + BASIC_BYTES + slot * SLOT - fw.lo;
+  return fw.img.slice(a, a + SLOT);
+}
+
+function encodeNames(names) {
+  const b = new Uint8Array(NUM_WT * NAME_LEN);
+  names.forEach((n, i) => {
+    const t = n.slice(0, NAME_LEN - 1);
+    for (let k = 0; k < NAME_LEN; k++) b[i * NAME_LEN + k] = k < t.length ? t.charCodeAt(k) & 0x7F : (k === t.length ? 0 : 0x20);
+  });
+  return b;
+}
+
+function buildPatch(fw, loc) {
+  const nA = loc.nameTable + FIRST_WT * NAME_LEN, nB = nA + NUM_WT * NAME_LEN;
+  const wA = loc.wave + BASIC_BYTES, wB = wA + NUM_WT * SLOT;
+  const nameBytes = encodeNames(S.names);
+  const waveBytes = new Uint8Array(NUM_WT * SLOT);
+  S.tables.forEach((t, i) => waveBytes.set(t, i * SLOT));
+  const want = a => (a >= nA && a < nB) ? nameBytes[a - nA] : (a >= wA && a < wB) ? waveBytes[a - wA] : -1;
+  const lines = fw.lines.slice();
+  let changedLines = 0;
+  for (const r of fw.recs) {
+    const s = r.start, e = s + r.len;
+    if (!((s < nB && e > nA) || (s < wB && e > wA))) continue;
+    const line = lines[r.li];
+    const body = line.replace(/\s+$/, '');
+    const ending = line.slice(body.length);
+    const t = body.trim();
+    const rec = new Uint8Array((t.length - 1) / 2);
+    for (let i = 0; i < rec.length; i++) rec[i] = (hv(t.charCodeAt(1 + 2 * i)) << 4) | hv(t.charCodeAt(2 + 2 * i));
+    let diff = false;
+    for (let k = 0; k < r.len; k++) { const v = want(s + k); if (v >= 0 && rec[4 + k] !== v) { rec[4 + k] = v; diff = true; } }
+    if (!diff) continue;                       // unchanged lines stay byte-identical
+    let sum = 0;
+    for (let k = 0; k < rec.length - 1; k++) sum += rec[k];
+    rec[rec.length - 1] = (-sum) & 255;
+    let out = ':';
+    for (const v of rec) out += HEXCH[v >> 4] + HEXCH[v & 15];
+    lines[r.li] = out + ending;
+    changedLines++;
+  }
+  const text = lines.join('');
+  // verify by re-reading the result
+  const chk = parseHex(text);
+  if (chk.lo !== fw.lo || chk.hi !== fw.hi) throw new Error('Verification failed: the address range changed. The file was not saved.');
+  let nChanged = 0, wChanged = 0;
+  for (let i = 0; i < fw.img.length; i++) {
+    if (chk.mask[i] !== fw.mask[i]) throw new Error('Verification failed: the file layout changed. The file was not saved.');
+    const a = fw.lo + i, w = want(a);
+    if (w >= 0) {
+      if (chk.img[i] !== w) throw new Error(`Verification failed at ${hexA(a)}. The file was not saved.`);
+      if (chk.img[i] !== fw.img[i]) { if (a < nB) nChanged++; else wChanged++; }
+    } else if (chk.img[i] !== fw.img[i]) throw new Error(`Verification failed: a byte outside the wavetables changed at ${hexA(a)}. The file was not saved.`);
+  }
+  return {text, changedLines, nChanged, wChanged};
+}
+
+/* ---------- WAV ---------- */
+function parseWav(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf), len = buf.byteLength;
+  const fail = m => { throw new Error(m); };
+  if (len < 12) fail('This file is too small to be a WAV file.');
+  const tag = o => String.fromCharCode(u8[o], u8[o + 1], u8[o + 2], u8[o + 3]);
+  if (tag(0) !== 'RIFF' || tag(8) !== 'WAVE') fail('This is not a WAV file (the RIFF/WAVE header is missing).');
+  let off = 12, fmt = null, data = null, clm = null;
+  const notes = [];
+  while (off + 8 <= len) {
+    const id = tag(off), body = off + 8;
+    let size = dv.getUint32(off + 4, true);
+    if (id === 'data') {
+      const remain = len - body;
+      if (size === 0xFFFFFFFF || (size === 0 && remain > 0)) { size = remain; notes.push('The audio data has no length set, so the rest of the file was used.'); }
+      else if (size > remain) fail(`The audio is corrupted or truncated: the file says it holds ${fmtN(size)} bytes of audio, but only ${fmtN(remain)} are present.`);
+      data = {off: body, size};
+    } else {
+      if (body + size > len) { if (fmt && data) break; fail(`The file is corrupted: its "${id.trim()}" section runs past the end of the file.`); }
+      if (id === 'fmt ') {
+        if (size < 16) fail('The file is corrupted: its format section is too short.');
+        fmt = {code: dv.getUint16(body, true), ch: dv.getUint16(body + 2, true), rate: dv.getUint32(body + 4, true), align: dv.getUint16(body + 12, true), bits: dv.getUint16(body + 14, true)};
+        if (fmt.code === 0xFFFE) { if (size < 40) fail('The file is corrupted: its extended format section is too short.'); fmt.code = dv.getUint16(body + 24, true); }
+      } else if (id === 'clm ') {
+        const m = /<!>\s*(\d+)/.exec(String.fromCharCode(...u8.subarray(body, body + Math.min(size, 64))));
+        if (m) clm = parseInt(m[1], 10);
+      }
+    }
+    off = body + size + (size & 1);
+  }
+  if (!fmt) fail('The file is corrupted: it has no format section.');
+  if (!data) fail('The file has no audio data.');
+  const {code, ch, bits} = fmt;
+  if (!ch) fail('The file is corrupted: it says it has 0 channels.');
+  if (code === 1) { if (![8, 16, 24, 32].includes(bits)) fail(`${bits}-bit integer audio isn't supported. Use 8, 16, 24 or 32-bit.`); }
+  else if (code === 3) { if (bits !== 32 && bits !== 64) fail(`${bits}-bit floating-point audio isn't supported.`); }
+  else fail(`This WAV uses a compressed or unusual format (code 0x${code.toString(16).toUpperCase()}). Save it as uncompressed PCM and try again.`);
+  const bps = bits / 8, fb = bps * ch;
+  if (fmt.align !== fb) fail(`The file is corrupted: its block size (${fmt.align}) doesn't match ${ch} channel(s) of ${bits}-bit audio.`);
+  const n = Math.floor(data.size / fb);
+  if (data.size % fb) notes.push('The audio ends with an incomplete sample, which was ignored.');
+  if (!n) fail('The file contains no audio samples.');
+  const mono = new Float32Array(n);
+  const rd = (o) => {
+    if (code === 3) return bits === 32 ? dv.getFloat32(o, true) : dv.getFloat64(o, true);
+    if (bits === 8) return (u8[o] - 128) / 128;
+    if (bits === 16) return dv.getInt16(o, true) / 32768;
+    if (bits === 24) return (((u8[o] | (u8[o + 1] << 8) | (u8[o + 2] << 16)) << 8) >> 8) / 8388608;
+    return dv.getInt32(o, true) / 2147483648;
+  };
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    for (let c = 0; c < ch; c++) s += rd(data.off + i * fb + c * bps);
+    s /= ch;
+    if (!Number.isFinite(s)) fail(`The audio is corrupted: sample ${fmtN(i)} is not a valid number.`);
+    mono[i] = s;
+  }
+  const raw8 = (code === 1 && bits === 8 && ch === 1) ? u8.slice(data.off, data.off + n) : null;
+  return {code, ch, rate: fmt.rate, bits, n, mono, raw8, clm, notes};
+}
+
+function quantize(f) {
+  const out = new Uint8Array(f.length);
+  let clipped = 0;
+  for (let i = 0; i < f.length; i++) {
+    let v = Math.round(f[i] * 128) + 128;
+    if (v < 0) { v = 0; clipped++; } else if (v > 255) { v = 255; clipped++; }
+    out[i] = v;
+  }
+  return {bytes: out, clipped};
+}
+
+// Band-limited resampling of one single-cycle frame (it's periodic, so a short DFT is exact).
+function resampleCycle(x, M) {
+  const N = x.length;
+  if (N === M) return Float32Array.from(x);
+  const K = Math.min(Math.floor((N - 1) / 2), Math.floor((M - 1) / 2));
+  const cN = new Float64Array(N), sN = new Float64Array(N);
+  for (let i = 0; i < N; i++) { cN[i] = Math.cos(2 * Math.PI * i / N); sN[i] = Math.sin(2 * Math.PI * i / N); }
+  let dc = 0;
+  for (let i = 0; i < N; i++) dc += x[i];
+  dc /= N;
+  const A = new Float64Array(K + 1), B = new Float64Array(K + 1);
+  for (let k = 1; k <= K; k++) {
+    let a = 0, b = 0, idx = 0;
+    for (let i = 0; i < N; i++) { a += x[i] * cN[idx]; b += x[i] * sN[idx]; idx += k; if (idx >= N) idx -= N; }
+    A[k] = 2 * a / N; B[k] = 2 * b / N;
+  }
+  const y = new Float32Array(M).fill(dc);
+  for (let k = 1; k <= K; k++) {
+    if (!A[k] && !B[k]) continue;
+    for (let m = 0; m < M; m++) { const ph = 2 * Math.PI * k * m / M; y[m] += A[k] * Math.cos(ph) + B[k] * Math.sin(ph); }
+  }
+  return y;
+}
+
+function convertLayout(mono, frames, period) {
+  const cache = new Map();
+  const src = f => {
+    if (!cache.has(f)) cache.set(f, resampleCycle(mono.subarray(f * period, (f + 1) * period), FRAME));
+    return cache.get(f);
+  };
+  const out = new Float32Array(SLOT);
+  for (let k = 0; k < FRAMES; k++) {
+    const pos = frames === 1 ? 0 : k * (frames - 1) / (FRAMES - 1);
+    if (frames >= FRAMES) {
+      out.set(src(Math.round(pos)), k * FRAME);       // keep evenly spaced original frames
+    } else {
+      const f0 = Math.floor(pos), f1 = Math.min(frames - 1, f0 + 1), t = pos - f0;
+      const a = src(f0), b = src(f1);
+      for (let i = 0; i < FRAME; i++) out[k * FRAME + i] = a[i] + (b[i] - a[i]) * t;
+    }
+  }
+  return out;
+}
+
+function makeWav(table, sixteen) {
+  const bps = sixteen ? 2 : 1, dataLen = SLOT * bps;
+  let clm = '<!>256 10000000 wavetable (www.xferrecords.com)';
+  if (clm.length & 1) clm += '\0';
+  const total = 12 + 24 + 8 + clm.length + 8 + dataLen;
+  const buf = new ArrayBuffer(total), dv = new DataView(buf), u8 = new Uint8Array(buf);
+  let o = 0;
+  const str = s => { for (let i = 0; i < s.length; i++) u8[o++] = s.charCodeAt(i); };
+  const u32 = v => { dv.setUint32(o, v, true); o += 4; };
+  const u16 = v => { dv.setUint16(o, v, true); o += 2; };
+  str('RIFF'); u32(total - 8); str('WAVE');
+  str('fmt '); u32(16); u16(1); u16(1); u32(44100); u32(44100 * bps); u16(bps); u16(bps * 8);
+  str('clm '); u32(clm.length); str(clm);
+  str('data'); u32(dataLen);
+  if (sixteen) for (let i = 0; i < SLOT; i++) { dv.setInt16(o, (table[i] - 128) * 256, true); o += 2; }
+  else u8.set(table, o);
+  return new Blob([buf], {type: 'audio/wav'});
+}
+
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+/* ---------- dialogs ---------- */
+const overlay = $('#overlay'), dlg = $('#dialog');
+let dlgBusy = false;
+function openDialog(html) { dlg.innerHTML = html; overlay.classList.add('open'); dlgBusy = false; const f = dlg.querySelector('button:not(:disabled), input'); if (f) f.focus(); return dlg; }
+function closeDialog() { overlay.classList.remove('open'); dlg.innerHTML = ''; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && overlay.classList.contains('open') && !dlgBusy) closeDialog(); });
+const msg = (cls, html) => `<div class="msg ${cls}">${html}</div>`;
+
+function confirmDialog(title, text, okLabel) {
+  return new Promise(resolve => {
+    const d = openDialog(`<h2>${esc(title)}</h2><p>${text}</p><div class="actions"><button data-a="no">Cancel</button><button class="primary" data-a="yes">${esc(okLabel)}</button></div>`);
+    d.querySelector('[data-a=no]').onclick = () => { closeDialog(); resolve(false); };
+    d.querySelector('[data-a=yes]').onclick = () => { closeDialog(); resolve(true); };
+  });
+}
+
+/* ---------- firmware dialog (load + patch) ---------- */
+function openFirmwareDialog(mode) {
+  const isPatch = mode === 'patch';
+  const d = openDialog(`
+    <h2>${isPatch ? 'Patch firmware' : 'Load firmware'}</h2>
+    <p class="dim">${isPatch
+      ? "Choose the firmware to write the buffer's 61 wavetables and names into. It can be a different model or version from the file you loaded them from. Only those bytes change."
+      : 'The 61 wavetables and their names are read from this file into the buffer.'}</p>
+    <fieldset><legend>Which hardware is this firmware for?</legend>
+      ${Object.entries(MODELS).map(([k, m]) => `<label><input type="radio" name="model" value="${k}"> ${m.label}</label>`).join('')}
+    </fieldset>
+    <div class="filerow"><button data-a="pick" disabled>Choose .hex file…</button><span class="fname">no file chosen</span>
+      <input type="file" accept=".hex,.ihex" hidden></div>
+    <div class="status"></div>
+    <div class="actions"><button data-a="cancel">Cancel</button><button class="primary" data-a="go" disabled>${isPatch ? 'Patch' : 'Load'}</button></div>`);
+  const pick = d.querySelector('[data-a=pick]'), go = d.querySelector('[data-a=go]'), cancel = d.querySelector('[data-a=cancel]');
+  const file = d.querySelector('input[type=file]'), fname = d.querySelector('.fname'), status = d.querySelector('.status');
+  let fw = null, loc = null, fileName = '', model = null;
+
+  const relocate = () => {
+    loc = null; go.disabled = true;
+    if (!fw || !model) return;
+    const m = MODELS[model];
+    try { loc = locate(fw, model); }
+    catch (e) { status.innerHTML = msg('err', esc(e.message)); return; }
+    let html = '';
+    if (loc.exact) html += msg('ok', `✓ Found the wavetables at ${hexA(loc.wave + BASIC_BYTES)} and names at ${hexA(loc.nameTable + FIRST_WT * NAME_LEN)}, the expected place for ${m.label} ${m.ver}.`);
+    else if (loc.matchKey) html += msg('warn', `⚠ This file doesn't match the ${m.label} ${m.ver} layout. It matches <b>${MODELS[loc.matchKey].label} ${MODELS[loc.matchKey].ver}</b> instead. Check that you picked the right hardware.`);
+    else html += msg('warn', `⚠ This isn't the ${m.label} ${m.ver} build this tool was made with, probably a different version. The wavetables were found and checked at ${hexA(loc.wave + BASIC_BYTES)}, so the file can still be used.`);
+    const other = Object.keys(MODELS).find(k => k !== model && MODELS[k].hint.test(fileName));
+    if (other) html += msg('warn', `⚠ The file name suggests ${MODELS[other].label}, but you chose ${m.label}.`);
+    if (isPatch) html += msg('info', 'Patching writes all 61 wavetables and names from the buffer, then asks where to save the new file. The original file is not changed.');
+    status.innerHTML = html;
+    go.disabled = false;
+  };
+
+  d.querySelectorAll('input[name=model]').forEach(r => r.onchange = () => { model = r.value; pick.disabled = false; relocate(); });
+  pick.onclick = () => file.click();
+  file.onchange = async () => {
+    const f = file.files[0]; if (!f) return;
+    fileName = f.name; fname.textContent = f.name; fw = null; go.disabled = true;
+    status.innerHTML = msg('info', 'Reading…');
+    await nextFrame();
+    try { fw = parseHex(await f.text()); }
+    catch (e) { status.innerHTML = msg('err', esc(e.message)); return; }
+    relocate();
+  };
+  cancel.onclick = closeDialog;
+  go.onclick = async () => {
+    if (!fw || !loc) return;
+    if (!isPatch) {
+      if (S.dirty && !(await confirmDialog('Replace buffer?', 'Loading a new firmware replaces the wavetables and names in the buffer, including your edits that have not been patched into a file.', 'Replace'))) return;
+      loadIntoBuffer(fw, loc, model, fileName);
+      closeDialog();
+      return;
+    }
+    await doPatch(fw, loc, fileName, status, go, cancel);
+  };
+}
+
+function loadIntoBuffer(fw, loc, model, fileName) {
+  stopPlay();
+  S.names = []; S.tables = [];
+  for (let i = 0; i < NUM_WT; i++) { S.names.push(readName(fw, loc, i)); S.tables.push(readTable(fw, loc, i)); }
+  S.loaded = true; S.dirty = false; S.sel = -1;
+  const m = MODELS[model];
+  $('#fwInfo').textContent = `${m.label}${loc.exact ? ' ' + m.ver : ' (other version)'} · ${fileName}`;
+  $('#fwInfo').title = fileName;
+  buildMenu();
+  select(-1);
+  $('#btnPatch').disabled = false;
+}
+
+async function doPatch(fw, loc, fileName, status, go, cancel) {
+  const suggested = fileName.replace(/\.(hex|ihex)$/i, '') + '_patched.hex';
+  let handle = null;
+  if (window.showSaveFilePicker) {
+    try { handle = await window.showSaveFilePicker({suggestedName: suggested, types: [{description: 'Intel HEX firmware', accept: {'application/octet-stream': ['.hex']}}]}); }
+    catch (e) { if (e && e.name === 'AbortError') return; handle = null; }
+  }
+  dlgBusy = true; go.disabled = true; cancel.disabled = true;
+  status.innerHTML = msg('info', 'Patching and verifying…');
+  await nextFrame();
+  let res;
+  try { res = buildPatch(fw, loc); }
+  catch (e) { status.innerHTML = msg('err', esc(e.message)); dlgBusy = false; cancel.disabled = false; go.disabled = false; return; }
+  try {
+    if (handle) { const w = await handle.createWritable(); await w.write(res.text); await w.close(); }
+    else download(new Blob([res.text], {type: 'application/octet-stream'}), suggested);
+  } catch (e) {
+    status.innerHTML = msg('err', 'Saving failed: ' + esc(e.message)); dlgBusy = false; cancel.disabled = false; go.disabled = false; return;
+  }
+  S.dirty = false;
+  dlgBusy = false; cancel.disabled = false; cancel.textContent = 'Close';
+  status.innerHTML = msg('ok', `✓ Saved ${esc(handle ? handle.name : suggested)}.`) +
+    msg('info', `Changed ${fmtN(res.nChanged)} name bytes and ${fmtN(res.wChanged)} wavetable bytes on ${fmtN(res.changedLines)} lines. Every other byte was checked and is unchanged.`);
+}
+
+/* ---------- menu + name editing ---------- */
+const menu = $('#menu'), nameInput = $('#nameInput'), nameBox = $('#nameBox');
+function buildMenu() {
+  menu.innerHTML = '';
+  S.names.forEach((n, i) => {
+    const row = document.createElement('div');
+    row.className = 'item'; row.setAttribute('role', 'option'); row.dataset.i = i;
+    row.innerHTML = `<span class="hx">${hex2(FIRST_WT + i)}</span><span class="nm"></span>`;
+    row.querySelector('.nm').textContent = 'WT-' + n;
+    row.onclick = () => { select(i); menu.focus({preventScroll: true}); };
+    menu.appendChild(row);
+  });
+}
+function select(i) {
+  S.sel = i;
+  menu.querySelectorAll('.item').forEach(r => { const on = +r.dataset.i === i; r.classList.toggle('sel', on); r.setAttribute('aria-selected', on); if (on) r.scrollIntoView({block: 'nearest'}); });
+  const has = i >= 0;
+  nameInput.disabled = !has; nameBox.classList.toggle('disabled', !has);
+  nameInput.value = has ? S.names[i] : '';
+  ['#frameSlider', '#btnTravel', '#btnToggle', '#travelSecs', '#btnLoadWt', '#btnExportWt'].forEach(s => $(s).disabled = !has);
+  updateFrameLabel();
+  if (has && AUDIO.mode !== 'off') AUDIO.post({table: floatTable(S.tables[i])});
+  if (!has) stopPlay();
+  draw();
+}
+menu.addEventListener('keydown', e => {
+  if (!S.loaded) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const d = e.key === 'ArrowDown' ? 1 : -1;
+    select(S.sel < 0 ? 0 : Math.max(0, Math.min(NUM_WT - 1, S.sel + d)));
+  }
+});
+nameBox.addEventListener('mousedown', e => { if (e.target !== nameInput && !nameInput.disabled) { e.preventDefault(); nameInput.focus(); } });
+nameInput.addEventListener('input', () => {
+  if (S.sel < 0) return;
+  const v = nameInput.value, caret = nameInput.selectionStart ?? v.length;
+  let clean = '', removedBefore = 0;
+  for (let k = 0; k < v.length; k++) {
+    const c = v[k].toUpperCase();
+    if (/^[A-Z0-9:-]$/.test(c)) clean += c; else if (k < caret) removedBefore++;
+  }
+  clean = clean.slice(0, NAME_MAX);
+  if (clean !== v) { nameInput.value = clean; const p = Math.min(clean.length, caret - removedBefore); nameInput.setSelectionRange(p, p); }
+  if (S.names[S.sel] !== clean) { S.names[S.sel] = clean; S.dirty = true; }
+  const row = menu.querySelector(`.item[data-i="${S.sel}"] .nm`);
+  if (row) row.textContent = 'WT-' + clean;
+});
+
+/* ---------- visualizer ---------- */
+const cv = $('#viz'), g2 = cv.getContext('2d');
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const COL = {};
+function readColors() { ['--panel', '--fg', '--dim', '--faint', '--hi', '--line'].forEach(n => COL[n] = css(n)); }
+function draw(hiFrame) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W || !H) return;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  g2.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g2.fillStyle = COL['--panel']; g2.fillRect(0, 0, W, H);
+  if (S.sel < 0) {
+    g2.fillStyle = COL['--faint']; g2.font = `13px ${css('--mono')}`; g2.textAlign = 'center';
+    g2.fillText(S.loaded ? 'Select a wavetable' : 'No firmware loaded', W / 2, H / 2);
+    return;
+  }
+  const tb = S.tables[S.sel], hf = hiFrame ?? S.frame;
+  const pad = 18, depthX = W * 0.30, depthY = H * 0.46;
+  const waveW = Math.max(40, W - pad * 2 - depthX), amp = Math.max(12, (H - pad * 2 - depthY) / 2);
+  const path = f => {
+    const ox = pad + f / 63 * depthX, oy = H - pad - amp - f / 63 * depthY, base = f * FRAME;
+    g2.beginPath();
+    for (let i = 0; i < FRAME; i++) {
+      const x = ox + i / (FRAME - 1) * waveW, y = oy - (tb[base + i] - 128) / 128 * amp;
+      i ? g2.lineTo(x, y) : g2.moveTo(x, y);
+    }
+    return {ox, oy};
+  };
+  g2.lineJoin = 'round';
+  for (let f = 63; f >= 0; f--) {
+    const {ox, oy} = path(f);
+    g2.lineTo(ox + waveW, oy + amp); g2.lineTo(ox, oy + amp); g2.closePath();
+    g2.fillStyle = 'rgba(17,17,21,0.55)'; g2.fill();
+    path(f);
+    const t = 1 - f / 63;
+    g2.strokeStyle = `rgba(${Math.round(110 + 120 * t)},${Math.round(140 + 95 * t)},${Math.round(190 + 50 * t)},${(0.35 + 0.6 * t).toFixed(3)})`;
+    g2.lineWidth = 1; g2.stroke();
+  }
+  path(hf); g2.strokeStyle = COL['--hi']; g2.lineWidth = 2; g2.stroke();
+}
+new ResizeObserver(() => draw(AUDIO.mode === 'travel' ? travelFrame() : undefined)).observe(cv);
+
+const slider = $('#frameSlider');
+function updateFrameLabel(f) {
+  const v = f ?? S.frame;
+  $('#frameLbl').innerHTML = S.sel < 0 ? 'FRAME --/64' : `FRAME <b>${String(v + 1).padStart(2, '0')}</b>/64`;
+}
+slider.addEventListener('input', () => {
+  S.frame = +slider.value;
+  if (AUDIO.mode === 'toggle') AUDIO.post({target: S.frame});
+  if (AUDIO.mode !== 'travel') { updateFrameLabel(); draw(); }
+});
+
+/* ---------- audio ---------- */
+function renderBlock(st, out, sr, t) {
+  const tb = st.table, n = out.length;
+  if (!tb || st.mode === 'off') { out.fill(0); return; }
+  const inc = st.freq * 256 / sr, k = 1 - Math.exp(-1 / (0.012 * sr));
+  let ph = st.phase, fr = st.frame;
+  for (let i = 0; i < n; i++) {
+    let pos;
+    if (st.mode === 'travel') { pos = (t + i / sr - st.t0) / st.dur; pos = pos < 0 ? 0 : pos > 1 ? 1 : pos; pos *= 63; }
+    else { fr += (st.target - fr) * k; pos = fr; }
+    const f0 = pos | 0, f1 = f0 < 63 ? f0 + 1 : 63, ff = pos - f0;
+    const i0 = ph | 0, i1 = (i0 + 1) & 255, pf = ph - i0, b0 = f0 * 256, b1 = f1 * 256;
+    const a = tb[b0 + i0] + (tb[b0 + i1] - tb[b0 + i0]) * pf;
+    const b = tb[b1 + i0] + (tb[b1 + i1] - tb[b1 + i0]) * pf;
+    out[i] = a + (b - a) * ff;
+    ph += inc; if (ph >= 256) ph -= 256;
+  }
+  st.phase = ph; st.frame = fr;
+}
+const AUDIO = {ctx: null, gain: null, post: () => {}, mode: 'off', t0: 0, dur: 1};
+function floatTable(u8) { const f = new Float32Array(SLOT); for (let i = 0; i < SLOT; i++) f[i] = (u8[i] - 128) / 128; return f; }
+async function ensureAudio() {
+  if (AUDIO.ctx) { if (AUDIO.ctx.state === 'suspended') await AUDIO.ctx.resume(); return; }
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  AUDIO.ctx = ctx;
+  const gain = ctx.createGain(); gain.gain.value = 0; gain.connect(ctx.destination); AUDIO.gain = gain;
+  const init = {table: null, freq: NOTE_HZ, mode: 'off', phase: 0, frame: 0, target: 0, t0: 0, dur: 1};
+  try {
+    if (!ctx.audioWorklet) throw new Error('no worklet');
+    const src = `const renderBlock = ${renderBlock.toString()};
+      class P extends AudioWorkletProcessor {
+        constructor() { super(); this.st = ${JSON.stringify(init)}; this.port.onmessage = e => Object.assign(this.st, e.data); }
+        process(i, o) { const out = o[0][0]; renderBlock(this.st, out, sampleRate, currentTime); for (let c = 1; c < o[0].length; c++) o[0][c].set(out); return true; }
+      }
+      registerProcessor('m8-wt', P);`;
+    const url = URL.createObjectURL(new Blob([src], {type: 'text/javascript'}));
+    await ctx.audioWorklet.addModule(url);
+    const node = new AudioWorkletNode(ctx, 'm8-wt', {numberOfInputs: 0, outputChannelCount: [1]});
+    node.connect(gain);
+    AUDIO.post = m => node.port.postMessage(m);
+  } catch (e) {
+    const st = {...init};
+    const node = ctx.createScriptProcessor(1024, 0, 1);
+    node.onaudioprocess = ev => renderBlock(st, ev.outputBuffer.getChannelData(0), ctx.sampleRate, ev.playbackTime);
+    node.connect(gain);
+    AUDIO.post = m => Object.assign(st, m);
+  }
+}
+function travelPos() { return Math.max(0, Math.min(1, (AUDIO.ctx.currentTime - AUDIO.t0) / AUDIO.dur)) * 63; }
+function travelFrame() { return Math.round(travelPos()); }
+function readSecs() {
+  const el = $('#travelSecs'), v = parseFloat(el.value);
+  const ok = Number.isFinite(v) && v >= 0.1 && v <= 600;
+  el.classList.toggle('bad', !ok);
+  return ok ? v : null;
+}
+async function startPlay(mode) {
+  if (S.sel < 0) return;
+  let dur = 1;
+  if (mode === 'travel') { dur = readSecs(); if (!dur) return; }
+  await ensureAudio();
+  const ctx = AUDIO.ctx, now = ctx.currentTime, g = AUDIO.gain.gain;
+  const table = floatTable(S.tables[S.sel]);
+  if (mode === 'travel') { AUDIO.t0 = now + 0.05; AUDIO.dur = dur; AUDIO.post({table, mode, t0: AUDIO.t0, dur}); }
+  else AUDIO.post({table, mode, frame: S.frame, target: S.frame});
+  g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(VOLUME, now + 0.03);
+  AUDIO.mode = mode;
+  updatePlayButtons();
+  if (mode === 'travel') requestAnimationFrame(tick);
+  else { updateFrameLabel(); draw(); }
+}
+function stopPlay() {
+  if (AUDIO.mode === 'off') return;
+  const ctx = AUDIO.ctx, now = ctx.currentTime, g = AUDIO.gain.gain;
+  g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(0, now + 0.04);
+  AUDIO.mode = 'off';
+  setTimeout(() => { if (AUDIO.mode === 'off') AUDIO.post({mode: 'off'}); }, 90);
+  updatePlayButtons(); updateFrameLabel(); draw();
+}
+function tick() {
+  if (AUDIO.mode !== 'travel') return;
+  const f = travelFrame();
+  updateFrameLabel(f); draw(f);
+  if (AUDIO.ctx.currentTime >= AUDIO.t0 + AUDIO.dur) { stopPlay(); return; }
+  requestAnimationFrame(tick);
+}
+function updatePlayButtons() {
+  $('#btnTravel').classList.toggle('active', AUDIO.mode === 'travel');
+  $('#btnToggle').classList.toggle('active', AUDIO.mode === 'toggle');
+}
+$('#btnTravel').onclick = () => AUDIO.mode === 'travel' ? stopPlay() : startPlay('travel');
+$('#btnToggle').onclick = () => AUDIO.mode === 'toggle' ? stopPlay() : startPlay('toggle');
+$('#travelSecs').addEventListener('input', readSecs);
+
+/* ---------- load wavetable dialog ---------- */
+function openLoadWavDialog() {
+  if (S.sel < 0) return;
+  const slot = S.sel;
+  const d = openDialog(`
+    <h2>Load wavetable</h2>
+    <p class="dim">Replaces <b style="color:var(--fg)">${esc(slotLabel(slot))}</b> in the buffer. The M8 stores each wavetable as mono 8-bit unsigned audio: 64 frames of 256 samples (16,384 samples).</p>
+    <div class="filerow"><button data-a="pick">Choose .wav file…</button><span class="fname">no file chosen</span><input type="file" accept=".wav,audio/wav,audio/x-wav" hidden></div>
+    <div class="status" data-r="info"></div>
+    <div class="layout" data-r="layout" hidden>
+      <div data-r="ltext"></div>
+      <div class="row">
+        <label class="field">Frame count<input type="text" data-r="frames" inputmode="numeric"></label>
+        <label class="field">Period (samples per frame)<input type="text" data-r="period" inputmode="numeric"></label>
+        <button data-a="ds" disabled>Downsample</button>
+      </div>
+      <div data-r="lmsg"></div>
+    </div>
+    <div class="actions"><button data-a="cancel">Cancel</button><button class="primary" data-a="load" disabled>Load</button></div>`);
+  const q = s => d.querySelector(s);
+  const file = q('input[type=file]'), info = q('[data-r=info]'), layout = q('[data-r=layout]');
+  const fIn = q('[data-r=frames]'), pIn = q('[data-r=period]'), ds = q('[data-a=ds]'), lmsg = q('[data-r=lmsg]'), loadBtn = q('[data-a=load]');
+  let wav = null, ready = null, lastEdited = null;
+
+  const showLayout = (text, prefillPeriod) => {
+    layout.hidden = false;
+    q('[data-r=ltext]').innerHTML = text;
+    fIn.value = ''; pIn.value = prefillPeriod ? String(prefillPeriod) : ''; lmsg.innerHTML = '';
+    lastEdited = prefillPeriod ? 'p' : null;
+    syncLayout();
+  };
+  const syncLayout = () => {
+    ds.disabled = true; lmsg.innerHTML = '';
+    if (!wav) return;
+    const n = wav.n;
+    const F = parseInt(fIn.value, 10), P = parseInt(pIn.value, 10);
+    if (lastEdited === 'f' && F > 0) pIn.value = Math.floor(n / F) || '';
+    if (lastEdited === 'p' && P > 0) fIn.value = Math.floor(n / P) || '';
+    const f = parseInt(fIn.value, 10), p = parseInt(pIn.value, 10);
+    fIn.classList.remove('bad'); pIn.classList.remove('bad');
+    if (!(f > 0 && p > 0)) return;
+    if (p < 4) { pIn.classList.add('bad'); lmsg.innerHTML = msg('err', 'A frame needs at least 4 samples.'); return; }
+    if (f * p > n) { (lastEdited === 'p' ? pIn : fIn).classList.add('bad'); lmsg.innerHTML = msg('err', `${f} × ${p} = ${fmtN(f * p)} samples, but the file only has ${fmtN(n)}.`); return; }
+    if (f * p < n) lmsg.innerHTML = msg('warn', `${fmtN(n - f * p)} samples at the end of the file don't fill a whole frame and will be ignored.`);
+    ds.disabled = false;
+  };
+  fIn.oninput = () => { lastEdited = 'f'; ready = null; loadBtn.disabled = true; syncLayout(); };
+  pIn.oninput = () => { lastEdited = 'p'; ready = null; loadBtn.disabled = true; syncLayout(); };
+
+  ds.onclick = async () => {
+    const f = parseInt(fIn.value, 10), p = parseInt(pIn.value, 10);
+    ds.disabled = true; lmsg.innerHTML = msg('info', 'Converting…');
+    await nextFrame();
+    const {bytes, clipped} = quantize(convertLayout(wav.mono, f, p));
+    ready = bytes;
+    const parts = [];
+    if (p !== FRAME) parts.push(`Resampled each frame from ${fmtN(p)} to 256 samples (band-limited, so no aliasing).`);
+    if (f > FRAMES) parts.push(`Kept 64 of the ${fmtN(f)} frames, evenly spaced.`);
+    else if (f < FRAMES) parts.push(f === 1 ? 'Repeated the single frame across all 64 frames.' : `Created 64 frames by crossfading between the ${f} source frames.`);
+    let html = msg('ok', `✓ Converted ${f} frame${f === 1 ? '' : 's'} × ${fmtN(p)} samples to 64 × 256. Press Load to use it.`) + parts.map(t => msg('info', t)).join('');
+    if (clipped) html += msg('warn', `⚠ ${fmtN(clipped)} samples went past full scale and were clipped.`);
+    lmsg.innerHTML = html;
+    ds.disabled = false; loadBtn.disabled = false;
+  };
+
+  q('[data-a=pick]').onclick = () => file.click();
+  file.onchange = async () => {
+    const fl = file.files[0]; if (!fl) return;
+    q('.fname').textContent = fl.name;
+    wav = null; ready = null; loadBtn.disabled = true; layout.hidden = true;
+    info.innerHTML = msg('info', 'Reading…');
+    await nextFrame();
+    try { wav = parseWav(await fl.arrayBuffer()); }
+    catch (e) { info.innerHTML = msg('err', '✗ ' + esc(e.message)); return; }
+    const kind = wav.code === 3 ? `${wav.bits}-bit float` : wav.bits === 8 ? '8-bit unsigned' : `${wav.bits}-bit signed`;
+    let html = msg('info', `${wav.ch === 1 ? 'Mono' : wav.ch + ' channels'}, ${kind}, ${fmtN(wav.rate)} Hz, ${fmtN(wav.n)} samples.`);
+    const conv = [];
+    if (wav.ch > 1) conv.push(`Mix the ${wav.ch} channels down to mono (average of the channels).`);
+    if (wav.code === 3) conv.push(`Convert ${wav.bits}-bit floating point to 8-bit unsigned. Values beyond ±1.0 will clip.`);
+    else if (wav.bits !== 8) conv.push(`Convert ${wav.bits}-bit signed to 8-bit unsigned. This lowers the resolution to 256 levels.`);
+    if (wav.n !== SLOT) conv.push(`Resample to 64 frames × 256 samples (set this up below).`);
+    if (conv.length) html += `<div class="msg warn">⚠ These conversions will happen on load:</div><ul>${conv.map(c => `<li>${esc(c)}</li>`).join('')}</ul>`;
+    wav.notes.forEach(n => html += msg('warn', '⚠ ' + esc(n)));
+    if (wav.rate !== 44100) html += msg('info', `The sample rate doesn't matter: each frame is one cycle, and the note played sets its pitch.`);
+    if (wav.n === SLOT) {
+      ready = wav.raw8 ? wav.raw8 : quantize(wav.mono).bytes;
+      const clipped = wav.raw8 ? 0 : quantize(wav.mono).clipped;
+      if (!conv.length) html += msg('ok', '✓ Already in the M8 format. It will be copied exactly.');
+      if (clipped) html += msg('warn', `⚠ ${fmtN(clipped)} samples are past full scale and will be clipped.`);
+      html += `<div class="msg info">Read as 64 frames × 256 samples. <button class="linkbtn" data-a="other">Different frame layout?</button></div>`;
+      loadBtn.disabled = false;
+    } else {
+      showLayout(`This file has <b>${fmtN(wav.n)}</b> samples, ${wav.n > SLOT ? 'more' : 'fewer'} than the 16,384 the M8 needs. Enter its frame count <i>or</i> its period (frame length), then press Downsample to convert it to 64 frames × 256 samples.` +
+        (wav.clm ? ` The file says its frames are ${fmtN(wav.clm)} samples long.` : ''), wav.clm);
+    }
+    info.innerHTML = html;
+    const other = info.querySelector('[data-a=other]');
+    if (other) other.onclick = () => { ready = null; loadBtn.disabled = true; showLayout(`Enter the frame count <i>or</i> period this file really uses, then press Downsample.`, wav.clm); };
+  };
+  q('[data-a=cancel]').onclick = closeDialog;
+  loadBtn.onclick = () => {
+    if (!ready || ready.length !== SLOT) return;
+    S.tables[slot] = ready; S.dirty = true;
+    closeDialog();
+    if (S.sel === slot) { if (AUDIO.mode !== 'off') AUDIO.post({table: floatTable(ready)}); draw(AUDIO.mode === 'travel' ? travelFrame() : undefined); }
+  };
+}
+
+/* ---------- export dialog ---------- */
+function openExportDialog() {
+  if (S.sel < 0) return;
+  const slot = S.sel;
+  const d = openDialog(`
+    <h2>Export wavetable</h2>
+    <p class="dim">Saves <b style="color:var(--fg)">${esc(slotLabel(slot))}</b> as a WAV file (64 frames × 256 samples).</p>
+    <fieldset><legend>Format</legend>
+      <label class="block"><input type="radio" name="fmt" value="8" checked> Original: unsigned 8-bit</label>
+      <label class="block"><input type="radio" name="fmt" value="16"> Convert to signed 16-bit</label>
+    </fieldset>
+    ${msg('warn', '⚠ Unsigned 8-bit is the M8\'s own format, but it may not be recognized by all audio software. Choose 16-bit if your software can\'t open it.')}
+    <div class="actions"><button data-a="cancel">Cancel</button><button class="primary" data-a="go">Export</button></div>`);
+  d.querySelector('[data-a=cancel]').onclick = closeDialog;
+  d.querySelector('[data-a=go]').onclick = () => {
+    const sixteen = d.querySelector('input[name=fmt]:checked').value === '16';
+    const nm = S.names[slot].replace(/[^A-Za-z0-9-]+/g, '_').replace(/^_+|_+$/g, '');
+    download(makeWav(S.tables[slot], sixteen), `${hex2(FIRST_WT + slot)}${nm ? '_' + nm : ''}${sixteen ? '_16bit' : '_8bit'}.wav`);
+    closeDialog();
+  };
+}
+
+/* ---------- wiring ---------- */
+$('#btnLoadFw').onclick = () => openFirmwareDialog('load');
+$('#btnPatch').onclick = () => openFirmwareDialog('patch');
+$('#btnLoadWt').onclick = openLoadWavDialog;
+$('#btnExportWt').onclick = openExportDialog;
+window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+readColors();
+draw();
+</script>
+</body>
+</html>
