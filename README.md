@@ -22,6 +22,6 @@ Known layouts: Headless 6.5.2C, Model 01 6.6.2A, Model 02 6.6.2A. Other versions
 
 ## Notes
 
-- **Patch** opens a native "Save as" window in Chrome and Edge. Firefox and Safari don't support that yet, so the file is downloaded instead.
 - Playback uses a fixed pitch of C-4 (261.63 Hz).
 - Not affiliated with Dirtywave. Flash modified firmware at your own risk, and make sure you can restore the official firmware first.
+- Made with Claude
